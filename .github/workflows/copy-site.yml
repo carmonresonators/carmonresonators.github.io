@@ -1,0 +1,43 @@
+name: Copy Carmon site from Tel Aviv University
+on:
+  push:
+    paths: ['.github/workflows/copy-site.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy pages, photos and PDFs
+        run: |
+          SITE=https://web2.eng.tau.ac.il/wtest/carmon1
+          mkdir -p docs && cd docs
+          # 1. All pages, with their look (styles, scripts, images), links made local
+          wget --mirror --page-requisites --convert-links --adjust-extension --no-parent \
+               -e robots=off --tries=3 --timeout=60 --wait=0.1 -nH --cut-dirs=2 \
+               --reject-regex 'wp-json|xmlrpc|replytocom|/feed/|wp-login' \
+               "$SITE/" || true
+          # 2. Every uploaded file (photos, PDFs), also ones no page links to
+          : > ../urls.txt
+          for p in $(seq 1 60); do
+            curl -sf "$SITE/index.php/wp-json/wp/v2/media?per_page=100&page=$p&_fields=source_url" \
+              | jq -r '.[].source_url' >> ../urls.txt || break
+          done
+          sed -i 's#^http:#https:#' ../urls.txt
+          echo "Media files listed: $(wc -l < ../urls.txt)"
+          wget -nc -x -nH --cut-dirs=2 --tries=3 --timeout=120 -i ../urls.txt || true
+          # GitHub refuses single files over 100 MB
+          find . -type f -size +95M -print -delete > ../too-big.txt
+          touch .nojekyll
+          echo "Files: $(find . -type f | wc -l)   Size: $(du -sh . | cut -f1)"
+      - name: Save to this repository
+        run: |
+          git config user.name "site-copy"
+          git config user.email "site-copy@users.noreply.github.com"
+          git config http.postBuffer 524288000
+          git add docs too-big.txt
+          git commit -m "Copy of web2.eng.tau.ac.il/wtest/carmon1" || echo "nothing new"
+          git push
